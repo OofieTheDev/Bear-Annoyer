@@ -26,6 +26,11 @@ class Bear_Annoyer():
         self.target_channel = None
         self.endpoint = None
         self.switch = None
+        self.resume = False
+        self.hbThread = None
+        self.sequence = None
+        self.sessionId = None
+        self.resumeGatewayURL = None
         self.TARGET_USER_ID = TARGET_USER_ID
         self.TARGET_ROLE_ID = TARGET_ROLE_ID
         self.API_URL = os.getenv("API_URL")
@@ -52,20 +57,45 @@ class Bear_Annoyer():
             'accept-language': 'en-US,en;q=0.9'
         }
 
-    def start(self):
-        self.ws.connect("wss://gateway.discord.gg/?v=10&encoding=json")
-
+    def initial_conn(self):
+        self.ws.connect(Bear_Annoyer.DISCORD_GATEWAY)
+        
         event = self.recv_res(self.ws)
-
+        
         hbInterval = event['d']['heartbeat_interval'] / 1000
-        print(hbInterval)
-        hbThread = threading.Thread(target = self.hb, args=(hbInterval, self.ws), daemon=True)
-        hbThread.start()
-
+        print(f'Heartbeat: {hbInterval}')
+        self.hbThread = threading.Thread(target = self.hb, args=(hbInterval, self.ws), daemon=True)
+        self.hbThread.start()
+        
         self.send_req(self.ws, self.PAYLOAD)
+
+    def start(self):
+        self.initial_conn()
 
         while True:
             event = self.recv_res(self.ws)
+            if event == 'RECONNECT REQUIRED':
+                print("RECONNECTED REQUIRED - BREAKING")
+                break
+
+            self.sequence = event['s']
+            print(f"Sequence: {self.sequence}")
+            # print(event['t'])
+            if event['t'] == "READY":
+                print("Readying...")
+
+                self.sessionId = event['d']['session_id']
+                self.resumeGatewayURL = event['d']['resume_gateway_url']
+                print(f"Session ID: {self.sessionId}")
+                print(f"ResumeGatewayURL: {self.resumeGatewayURL}")
+
+            # if event['op'] == 7:
+            #     self.hbThread.join()
+            #     self.ws.close()
+            #     self.ws.connect(Bear_Annoyer.DISCORD_GATEWAY)
+            #     if self.recv_res(self.ws)['op'] == 10:
+            #         self.resume_conn()
+                
 
             try:
                 if event['t'] == 'MESSAGE_CREATE' and event['d']['author']['id'] == self.TARGET_USER_ID:
@@ -89,17 +119,28 @@ class Bear_Annoyer():
 
             except Exception as e:
                 print(e)
+
+        self.hbThread.join()
+        self.start()
     
     @staticmethod
     def send_req(ws, req):
-        test = ws.send(json.dumps(req))
-        print(test)
+        wsRes = ws.send(json.dumps(req))
+        print(f'WsRes: {wsRes}')
 
-    @staticmethod
-    def recv_res(ws):
-        res = ws.recv()
-        if res:
-            return json.loads(res)
+    def recv_res(self, ws):
+        try:
+            res = ws.recv()
+            if res:
+                return json.loads(res)
+                
+        except websocket._exceptions.WebSocketConnectionClosedException: # when error occurs
+            return "RECONNECT REQUIRED"
+            # self.hbThread.join() # kill heartbeat
+            # self.ws.close() # close connection
+            # if not self.resume:
+            #     self.resume = not self.resume # invert self.resume
+            # self.initial_conn()
 
     def hb(self, interval, ws):
         print("Heartbeat started.")
@@ -107,10 +148,20 @@ class Bear_Annoyer():
             time.sleep(interval)
             hbJSON = {
                 'op': 1,
-                'd': 'null'
+                'd': "null"
             }
             self.send_req(ws, hbJSON)
             #print("Sent.")
+
+    def resume_conn(self):
+        self.send_req(self.resumeGatewayURL, json.dumps({
+            "op": 6,
+            "d": {
+              "token": self.TOKEN,
+              "session_id": self.sessionId,
+              "seq": self.sequence
+            }
+        }))
 
     @staticmethod
     def answer(fact): # randomly chooses a varied response to make it seem less bot-ish
