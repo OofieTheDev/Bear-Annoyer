@@ -134,7 +134,7 @@ class Bear_Annoyer():
             if res:
                 return json.loads(res)
                 
-        except websocket._exceptions.WebSocketConnectionClosedException: # when error occurs
+        except Exception as e: #websocket._exceptions.WebSocketConnectionClosedException: # when error occurs
             return "RECONNECT REQUIRED"
             # self.hbThread.join() # kill heartbeat
             # self.ws.close() # close connection
