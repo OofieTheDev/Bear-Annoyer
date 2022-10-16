@@ -11,6 +11,8 @@ load_dotenv()
 
 threads = []
 
+tokens_to_reload = []
+
 class Bear_Annoyer():
     DISCORD_GATEWAY = "wss://gateway.discord.gg/?v=10&encoding=json" # link to Discord Gateway
 
@@ -26,11 +28,13 @@ class Bear_Annoyer():
         self.target_channel = None
         self.endpoint = None
         self.switch = None
+        self.stopHbThread = False
         self.resume = False
         self.hbThread = None
         self.sequence = None
         self.sessionId = None
         self.resumeGatewayURL = None
+        self.errorOut = False
         self.TARGET_USER_ID = TARGET_USER_ID
         self.TARGET_ROLE_ID = TARGET_ROLE_ID
         self.API_URL = os.getenv("API_URL")
@@ -58,6 +62,7 @@ class Bear_Annoyer():
         }
 
     def initial_conn(self):
+        #self.__init__()
         self.ws.connect(Bear_Annoyer.DISCORD_GATEWAY)
         
         event = self.recv_res(self.ws)
@@ -69,25 +74,27 @@ class Bear_Annoyer():
         
         self.send_req(self.ws, self.PAYLOAD)
 
+
     def start(self):
         self.initial_conn()
 
         while True:
             event = self.recv_res(self.ws)
-            if event == 'RECONNECT REQUIRED':
-                print("RECONNECTED REQUIRED - BREAKING")
+            if self.errorOut:
+                print("Erroring out...")
                 break
 
-            self.sequence = event['s']
-            print(f"Sequence: {self.sequence}")
+            #self.sequence = event['s']
+            #print(f"Sequence: {self.sequence}")
             # print(event['t'])
-            if event['t'] == "READY":
-                print("Readying...")
+            if event is not None:
+                if event['t'] == "READY":
+                    print("Readying...")
 
-                self.sessionId = event['d']['session_id']
-                self.resumeGatewayURL = event['d']['resume_gateway_url']
-                print(f"Session ID: {self.sessionId}")
-                print(f"ResumeGatewayURL: {self.resumeGatewayURL}")
+                    self.sessionId = event['d']['session_id']
+                    self.resumeGatewayURL = event['d']['resume_gateway_url']
+                    print(f"Session ID: {self.sessionId}")
+                    print(f"ResumeGatewayURL: {self.resumeGatewayURL}")
 
             # if event['op'] == 7:
             #     self.hbThread.join()
@@ -117,16 +124,37 @@ class Bear_Annoyer():
                     time.sleep(random.randint(2, 5))  # make it seem more human
                     requests.post(sendEndpoint, data={'content': content}, headers=self.HEADERS) # send the message in target
 
-            except Exception as e:
-                print(e)
+                if event['t'] == 'MESSAGE_CREATE' and event['d']['author']['id'] == "738339281579409520" and event['d']['content'] == "are yall there":
+                    target_channel = event['d']['channel_id']
+                    sendEndpoint = f"https://discord.com/api/v9/channels/{target_channel}/messages"
+                    typingEndpoint = f"https://discord.com/api/v9/channels/{target_channel}/typing"
+                    requests.post(typingEndpoint, headers=self.HEADERS)
+                    time.sleep(random.randint(2, 5))
+                    requests.post(sendEndpoint, data={'content': "```Online```"}, headers=self.HEADERS)
 
+            except Exception as e:
+                print(f'Error in start(): {e}')
+                pass
+
+        self.stopHbThread = True
         self.hbThread.join()
-        self.start()
+        print("Hb Thread Joined")
+        self.ws.close()
+        print("Connection Closed")
+        tokens_to_reload.append(self.TOKEN)
+        print("Token appended to reload list")
+        # self.ws = websocket.WebSocket()
+        # self.start()
     
-    @staticmethod
-    def send_req(ws, req):
-        wsRes = ws.send(json.dumps(req))
-        print(f'WsRes: {wsRes}')
+    # @staticmethod
+    def send_req(self, ws, req):
+        try:
+            wsRes = ws.send(json.dumps(req))
+            print(f'WsRes: {wsRes}') 
+        except Exception as e:
+            print(f"Error in send_req func: {e}")
+            self.errorOut = True
+            return
 
     def recv_res(self, ws):
         try:
@@ -134,7 +162,9 @@ class Bear_Annoyer():
             if res:
                 return json.loads(res)
                 
-        except Exception as e: #websocket._exceptions.WebSocketConnectionClosedException: # when error occurs
+        except Exception as e: # websocket._exceptions.WebSocketConnectionClosedException
+            print(f"The E:\n{e}")
+            self.errorOut = True
             return "RECONNECT REQUIRED"
             # self.hbThread.join() # kill heartbeat
             # self.ws.close() # close connection
@@ -144,13 +174,25 @@ class Bear_Annoyer():
 
     def hb(self, interval, ws):
         print("Heartbeat started.")
-        while True:
+        while not self.stopHbThread:
             time.sleep(interval)
             hbJSON = {
                 'op': 1,
                 'd': "null"
             }
-            self.send_req(ws, hbJSON)
+            if self.stopHbThread:
+                print("Heartbeat breaking...")
+                break
+            try:
+                if not self.stopHbThread:
+                    try:
+                        self.send_req(ws, hbJSON)
+                    except Exception as e:
+                        print(self.stopHbThread)
+                        print(f"Error in HB: {e}")
+            except:
+                pass
+        return
             #print("Sent.")
 
     def resume_conn(self):
@@ -185,23 +227,39 @@ class Bear_Annoyer():
                 else:
                     return START_VAR + " " + fact
 
-def initialize(TOKEN):
-    try:
-        BearAnnoyer = Bear_Annoyer(TOKEN = TOKEN, TARGET_USER_ID = os.getenv("TARGET_USER_ID"), TARGET_ROLE_ID = os.getenv("TARGET_ROLE_ID"))
-        BearAnnoyer.start() # start Bear_Annoyer instance in separate thread
-    except Exception as e:
-        print(e)
+# def initialize(TOKEN):
+#     try:
+#         BearAnnoyer = Bear_Annoyer(TOKEN = TOKEN, TARGET_USER_ID = os.getenv("TARGET_USER_ID"), TARGET_ROLE_ID = os.getenv("TARGET_ROLE_ID"))
+#         BearAnnoyer.start() # start Bear_Annoyer instance in separate thread
+#     except Exception as e:
+#         print(e)
 
 def startAllAccounts():
     ACCOUNT_TOKENS = json.loads(os.getenv('TOKENS'))
     # print(ACCOUNT_TOKENS)
-    for i in ACCOUNT_TOKENS: # put the Bear_Annoyer on all accounts given
-        t = threading.Thread(target=initialize, args=(i,), daemon=True)
-        t.start()
-        threads.append(t)
+    # for i in ACCOUNT_TOKENS: # put the Bear_Annoyer on all accounts given
+    #     t = threading.Thread(target=initialize, args=(i,), daemon=True)
+    #     t.start()
+    #     threads.append(t)
+
+    # rework
+    for token in ACCOUNT_TOKENS:
+        BearAnnoyer = Bear_Annoyer(TOKEN = token, TARGET_USER_ID = os.getenv("TARGET_USER_ID"), TARGET_ROLE_ID = os.getenv("TARGET_ROLE_ID"))
+        BearThread = threading.Thread(target=BearAnnoyer.start)
+        BearThread.start()
+        threads.append(BearThread)
         
 
 if __name__ == "__main__":
     startAllAccounts()
     while True: # just so it doesn't exit after starting the threads lol
+        if len(tokens_to_reload) > 0:
+            for token in tokens_to_reload:
+                print("Reloading token...")
+                BearAnnoyer = Bear_Annoyer(TOKEN = token, TARGET_USER_ID = os.getenv("TARGET_USER_ID"), TARGET_ROLE_ID = os.getenv("TARGET_ROLE_ID"))
+                BearThread = threading.Thread(target=BearAnnoyer.start)
+                BearThread.start()
+                threads.append(BearThread)
+                
+            tokens_to_reload.clear()
         pass
